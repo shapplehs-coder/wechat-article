@@ -2,10 +2,10 @@ import requests
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class WeChatArticleDownloader:
-    def __init__(self, api_key="b975c9e0308d4a55afb2392990e060fd"):
+    def __init__(self, api_key="d6b88e7f639a4b2caf3ccd8f72ba251f"):
         """
         初始化下载器
         :param api_key: API 访问密钥
@@ -90,19 +90,27 @@ class WeChatArticleDownloader:
                 return {"data": response["articles"]}  # 转换为统一格式
         return response
     
-    def download_article(self, article_url, article_title=None, save_dir=None, account_name=None):
+    def download_article(self, article_url, article_title=None, save_dir=None, account_name=None, publish_time=None):
         """
         下载文章并保存为 markdown 格式
         :param article_url: 文章 URL
         :param article_title: 文章原始标题
         :param save_dir: 保存目录（默认以当天日期命名）
         :param account_name: 公众号名称
+        :param publish_time: 文章发布时间（datetime对象）
         :return: 是否下载成功
         """
         # 使用当天日期作为默认目录名
         if save_dir is None:
             today = datetime.now().strftime("%Y-%m-%d")
             save_dir = f"./{today}"
+        
+        # 检查是否是当天的文件夹
+        today = datetime.now().strftime("%Y-%m-%d")
+        if save_dir == f"./{today}":
+            # 每次下载都在当天日期文件夹内创建小时子文件夹
+            time_suffix = datetime.now().strftime("%H时")
+            save_dir = f"./{today}/{time_suffix}"
         
         # 创建保存目录
         if not os.path.exists(save_dir):
@@ -136,6 +144,8 @@ class WeChatArticleDownloader:
             if account_name:
                 title = f"【{account_name}】{title}"
             
+            
+            
             # 移除文件名中的非法字符
             title = "".join(c for c in title if c not in '\\/:*?"<>|')
             if title == "untitled":
@@ -144,6 +154,38 @@ class WeChatArticleDownloader:
             # 生成文件路径
             filename = f"{title}.md"
             filepath = os.path.join(save_dir, filename)
+            
+            # 检查文章是否已经下载过（包括当天目录下的所有子文件夹）
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_dir = f"./{today_str}"
+            article_exists = False
+            
+            # 检查当前文件路径是否存在
+            if os.path.exists(filepath):
+                article_exists = True
+            # 检查当天目录下的所有子文件夹
+            elif os.path.exists(today_dir):
+                for root, dirs, files in os.walk(today_dir):
+                    for file in files:
+                        if file == filename:
+                            article_exists = True
+                            break
+                    if article_exists:
+                        break
+            
+            if article_exists:
+                print(f"文章已存在，跳过下载: {filename}")
+                return False
+            
+            # 在文章内容最前方添加发布时间
+            if publish_time:
+                time_str = publish_time.strftime("%Y-%m-%d %H:%M")
+                content = f"> 发布时间: {time_str}\n\n{content}"
+            
+            # 删除以" #js"开头的行
+            lines = content.split('\n')
+            filtered_lines = [line for line in lines if not line.strip().startswith('#js')]
+            content = '\n'.join(filtered_lines)
             
             # 保存文件
             with open(filepath, "w", encoding="utf-8") as f:
@@ -155,15 +197,17 @@ class WeChatArticleDownloader:
             print(f"下载文章失败: {e}")
             return False
     
-    def batch_download_articles(self, account_id, account_name, save_dir=None, today_only=False):
+    def batch_download_articles(self, account_id, account_name, save_dir=None, days_limit=0):
         """
         批量下载指定公众号的文章
         :param account_id: 公众号 ID（fakeid）
         :param account_name: 公众号名称
         :param save_dir: 保存目录
-        :param today_only: 是否只下载今天发布的文章
+        :param days_limit: 下载前几天的文章，0表示只下载今天的
         :return: 成功下载的文章数量
         """
+
+        
         # 获取文章列表
         articles_response = self.get_articles(account_id, page_size=100)  # 增加 page_size 以获取更多文章
         if not articles_response or "data" not in articles_response:
@@ -173,22 +217,40 @@ class WeChatArticleDownloader:
         articles = articles_response["data"]
         print(f"找到 {len(articles)} 篇文章")
         
-        # 过滤出今天发布的文章
+        # 过滤文章
         filtered_articles = []
-        if today_only:
-            today = datetime.now().strftime("%Y-%m-%d")
-            print(f"\n过滤今天 ({today}) 发布的文章...")
+        if days_limit >= 0:
+            today = datetime.now()
+            # 转换为只包含日期的datetime对象，忽略时间部分
+            today_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = today_date
+            if days_limit > 0:
+                start_date = today_date - timedelta(days=days_limit)
+            start_date_str = start_date.strftime("%Y-%m-%d")
+            today_str = today_date.strftime("%Y-%m-%d")
+            
+            if days_limit == 0:
+                print(f"\n过滤今天 ({today_str}) 发布的文章...")
+            else:
+                print(f"\n过滤 {start_date_str} 到 {today_str} 发布的文章...")
             
             for article in articles:
                 # 获取文章的发布时间
                 update_time = article.get("update_time") or article.get("create_time")
                 if update_time:
                     # 将时间戳转换为日期
-                    article_date = datetime.fromtimestamp(update_time).strftime("%Y-%m-%d")
-                    if article_date == today:
+                    article_date = datetime.fromtimestamp(update_time)
+                    # 转换为只包含日期的datetime对象，忽略时间部分
+                    article_date_only = article_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    article_date_str = article_date_only.strftime("%Y-%m-%d")
+                    # 检查文章是否在指定的日期范围内
+                    if article_date_only >= start_date:
                         filtered_articles.append(article)
             
-            print(f"找到 {len(filtered_articles)} 篇今天发布的文章")
+            if days_limit == 0:
+                print(f"找到 {len(filtered_articles)} 篇今天发布的文章")
+            else:
+                print(f"找到 {len(filtered_articles)} 篇近 {days_limit} 天发布的文章")
         else:
             filtered_articles = articles
         
@@ -198,10 +260,21 @@ class WeChatArticleDownloader:
             article_url = article.get("url") or article.get("link") or article.get("content_url")
             article_title = article.get("title")  # 获取文章原始标题
             if article_url:
-                if self.download_article(article_url, article_title, save_dir, account_name):
-                    success_count += 1
-                # 避免请求过快
-                time.sleep(1)
+                    # 获取文章发布日期，用于创建对应文件夹
+                    update_time = article.get("update_time") or article.get("create_time")
+                    article_date_dir = save_dir
+                    publish_time = None
+                    if update_time:
+                        # 根据文章发布日期创建文件夹
+                        article_date = datetime.fromtimestamp(update_time).strftime("%Y-%m-%d")
+                        article_date_dir = f"./{article_date}"
+                        # 转换为datetime对象，用于传递给download_article
+                        publish_time = datetime.fromtimestamp(update_time)
+                    
+                    if self.download_article(article_url, article_title, article_date_dir, account_name, publish_time):
+                        success_count += 1
+                    # 避免请求过快
+                    time.sleep(1)
         
         print(f"批量下载完成，成功 {success_count} 篇")
         return success_count
@@ -232,7 +305,7 @@ if __name__ == "__main__":
     "财联社",
     "财联社早知道"
   ],
-  "today_only": true,
+  "days_limit": 0,  # 下载前几天的文章，0表示只下载今天的，1表示下载今天和昨天的，以此类推
   "page_size": 100
 }
         ''')
@@ -242,8 +315,9 @@ if __name__ == "__main__":
         with open(config_file, "r", encoding="utf-8") as f:
             config = json.load(f)
         
+        api_key = config.get("api_key", "d6b88e7f639a4b2caf3ccd8f72ba251f")
         keywords = config.get("keywords", [])
-        today_only = config.get("today_only", True)
+        days_limit = config.get("days_limit", 0)  # 新增配置项，默认值为0，表示只下载当天的文章
         
         if not keywords:
             print("错误: 配置文件中未设置 keywords")
@@ -253,10 +327,10 @@ if __name__ == "__main__":
         for keyword in keywords:
             print(f"- {keyword}")
         
-        if today_only:
+        if days_limit == 0:
             print("\n设置: 只下载今天发布的文章")
         else:
-            print("\n设置: 下载所有文章")
+            print(f"\n设置: 下载前 {days_limit} 天发布的文章")
         
     except json.JSONDecodeError as e:
         print(f"错误: 配置文件格式错误 - {e}")
@@ -266,7 +340,7 @@ if __name__ == "__main__":
         exit(1)
     
     # 初始化下载器
-    downloader = WeChatArticleDownloader()
+    downloader = WeChatArticleDownloader(api_key=api_key)
     
     # 遍历所有关键词
     total_success = 0
@@ -292,9 +366,11 @@ if __name__ == "__main__":
                     
                     # 批量下载文章
                     print(f"开始下载公众号 '{account_name}' 的文章...")
-                    if today_only:
+                    if days_limit == 0:
                         print("只下载今天发布的文章...")
-                    success_count = downloader.batch_download_articles(account_id, account_name, today_only=today_only)
+                    else:
+                        print(f"下载前 {days_limit} 天发布的文章...")
+                    success_count = downloader.batch_download_articles(account_id, account_name, days_limit=days_limit)
                     total_success += success_count
                 else:
                     print(f"\n跳过无效公众号: {account}")
