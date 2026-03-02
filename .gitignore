@@ -6,6 +6,7 @@ __pycache__/
 
 # 忽略其他临时文件
 *.txt
+!requirements.txt
 
 # 忽略编辑器相关文件
 .vscode/
